@@ -1,671 +1,335 @@
 'use client';
 
 // React Imports
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 // MUI Imports
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
-import TextField from '@mui/material/TextField';
+import CardHeader from '@mui/material/CardHeader';
 import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
-import Chip from '@mui/material/Chip';
-import TablePagination from '@mui/material/TablePagination';
-import IconButton from '@mui/material/IconButton';
-import Alert from '@mui/material/Alert';
 import CircularProgress from '@mui/material/CircularProgress';
-import Dialog from '@mui/material/Dialog';
-import DialogTitle from '@mui/material/DialogTitle';
-import DialogContent from '@mui/material/DialogContent';
-import DialogActions from '@mui/material/DialogActions';
-import MenuItem from '@mui/material/MenuItem';
-import type { TextFieldProps } from '@mui/material/TextField';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import Avatar from '@mui/material/Avatar';
+import List from '@mui/material/List';
+import ListItem from '@mui/material/ListItem';
+import ListItemText from '@mui/material/ListItemText';
+import Paper from '@mui/material/Paper';
+import Grid from '@mui/material/Grid';
+import Alert from '@mui/material/Alert';
+import IconButton from '@mui/material/IconButton';
+import Divider from '@mui/material/Divider';
 
 // Third-party Imports
-import classnames from 'classnames';
-import { rankItem } from '@tanstack/match-sorter-utils';
-import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  getFacetedRowModel,
-  getFacetedUniqueValues,
-  getFacetedMinMaxValues,
-} from '@tanstack/react-table';
-import type { ColumnDef, FilterFn } from '@tanstack/react-table';
-import type { RankingInfo } from '@tanstack/match-sorter-utils';
+import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
-import { toast } from 'react-toastify';
 
-// Style Imports
-import tableStyles from '@core/styles/table.module.css';
+// Icon Imports
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ScienceIcon from '@mui/icons-material/Science';
+import DescriptionIcon from '@mui/icons-material/Description';
+import DeleteIcon from '@mui/icons-material/Delete';
+import ChatIcon from '@mui/icons-material/Chat';
 
 // Type Imports
 import type { ThemeColor } from '@core/types';
-import type { TeamMemberType } from '@/types/apps/teamMemberTypes';
 
-declare module '@tanstack/table-core' {
-  interface FilterFns {
-    fuzzy: FilterFn<unknown>;
-  }
-  interface FilterMeta {
-    itemRank: RankingInfo;
-  }
+// Interfaces (inchangées)
+interface AnalysisResult {
+  final_score: number;
+  summary: string;
+  positive_points: string[];
+  areas_for_improvement: string[];
 }
 
-type TeamMemberTypeWithAction = TeamMemberType & {
-  action?: string;
-};
-
-type Colors = {
-  [key: string]: ThemeColor;
-};
-
-interface BackendResponse {
-  team_members: TeamMemberType[];
-  total: number;
-  page: number;
-  per_page: number;
+interface Message {
+  sender: 'user' | 'bot';
+  type: 'text' | 'analysis';
+  content: string | AnalysisResult;
+  timestamp: string;
 }
 
-const fuzzyFilter: FilterFn<any> = (row, columnId, value, addMeta) => {
-  const itemRank = rankItem(row.getValue(columnId), value);
-  addMeta({ itemRank });
-  return itemRank.passed;
-};
+// Composant d'affichage du résultat (inchangé)
+const AnalysisResultCard = ({ details }: { details: AnalysisResult }) => {
+  const getScoreColor = (score: number): ThemeColor => {
+    if (score < 50) return 'error';
+    if (score < 85) return 'warning';
+    return 'success';
+  };
 
-const DebouncedInput = ({
-  value: initialValue,
-  onChange,
-  debounce = 500,
-  ...props
-}: {
-  value: string | number;
-  onChange: (value: string | number) => void;
-  debounce?: number;
-} & Omit<TextFieldProps, 'onChange'>) => {
-  const [value, setValue] = useState(initialValue);
-  useEffect(() => setValue(initialValue), [initialValue]);
-  useEffect(() => {
-    const timeout = setTimeout(() => onChange(value), debounce);
-    return () => clearTimeout(timeout);
-  }, [value, onChange, debounce]);
-  return <TextField {...props} value={value} onChange={e => setValue(e.target.value)} size='small' />;
-};
-
-const colors: Colors = {
-  filowner: 'info',
-  engagement_leader: 'success',
-  team_manager: 'warning',
-  team_member: 'primary',
-  reviewer: 'secondary',
-  read_only: 'error',
-};
-
-const ROLES = [
-  'filowner',
-  'engagement_leader',
-  'team_manager',
-  'team_member',
-  'reviewer',
-  'read_only',
-];
-
-const columnHelper = createColumnHelper<TeamMemberTypeWithAction>();
-
-const TeamMemberPermissions = () => {
-  // States
-  const [data, setData] = useState<TeamMemberType[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
-  const [globalFilter, setGlobalFilter] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({ id: 0, user_id: '', mission_id: '', role: 'read_only' });
-  const [formError, setFormError] = useState<string | null>(null);
-  const [formLoading, setFormLoading] = useState(false);
-  const [validationErrors, setValidationErrors] = useState<{
-    user_id?: string;
-    mission_id?: string;
-    role?: string;
-  }>({});
-
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
-
-  // Axios Instance
-  const axiosInstance = axios.create({
-    baseURL: BASE_URL,
-    timeout: 10000,
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-  });
-
-  // Add JWT token to requests
-  axiosInstance.interceptors.request.use((config) => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  });
-
-  // Handle 401 errors
-  axiosInstance.interceptors.response.use(
-    (response) => response,
-    (error) => {
-      if (error.response?.status === 401) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        window.location.href = '/login';
-      }
-      return Promise.reject(error);
-    }
+  return (
+    <Paper elevation={2} sx={{ p: 2, mt: 1, minWidth: 400, maxWidth: 500, borderLeft: 5, borderColor: `${getScoreColor(details.final_score)}.main` }}>
+      <Typography variant="h6" sx={{ mb: 2, textAlign: 'center' }}>
+        Rapport de Conformité
+      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+        <Chip
+          label={`Score final : ${details.final_score} / 100`}
+          color={getScoreColor(details.final_score)}
+          variant="filled"
+          sx={{ fontSize: '1rem', p: 2 }}
+        />
+      </Box>
+      <Typography variant="body1" sx={{ mb: 2, fontStyle: 'italic' }}>
+        {details.summary}
+      </Typography>
+      <Divider sx={{ my: 2 }} />
+      <Typography variant="subtitle1" sx={{ color: 'success.main', fontWeight: 'bold' }}>
+        Points Conformes
+      </Typography>
+      <List dense sx={{ mb: 2 }}>
+        {details.positive_points.map((point, index) => (
+          <ListItem key={index} sx={{ p: 0 }}>
+            <CheckCircleIcon color="success" sx={{ mr: 1, fontSize: '1.2rem' }} />
+            <ListItemText primary={point} />
+          </ListItem>
+        ))}
+      </List>
+      <Typography variant="subtitle1" sx={{ color: 'error.main', fontWeight: 'bold' }}>
+        Axes d'Amélioration
+      </Typography>
+      <List dense>
+        {details.areas_for_improvement.map((point, index) => (
+          <ListItem key={index} sx={{ p: 0 }}>
+            <ErrorOutlineIcon color="error" sx={{ mr: 1, fontSize: '1.2rem' }} />
+            <ListItemText primary={point} />
+          </ListItem>
+        ))}
+        {details.areas_for_improvement.length === 0 && (
+             <ListItemText primary="Aucun problème majeur identifié. Excellent travail !" />
+        )}
+      </List>
+    </Paper>
   );
+};
 
-  // Fetch Team Members
-  const fetchTeamMembers = useCallback(async (retries = 3, delay = 1000) => {
-    setLoading(true);
-    setError(null);
-    try {
-      console.log(`Fetching team members from: ${BASE_URL}/api/team-members?page=${page + 1}&per_page=${pageSize}`);
-      const response = await axiosInstance.get<BackendResponse>(`/api/team-members?page=${page + 1}&per_page=${pageSize}`);
-      if (!response.data.team_members) {
-        throw new Error('Invalid response structure: team_members array is missing');
-      }
-      setData(response.data.team_members);
-      setTotal(response.data.total || 0);
-      console.log('Fetched team members:', response.data.team_members);
-    } catch (err: any) {
-      console.error('Fetch error:', err);
-      if (retries > 0 && err.code === 'ECONNREFUSED') {
-        console.log(`Retrying... (${retries} attempts left)`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return fetchTeamMembers(retries - 1, delay * 2);
-      }
-      const errorMessage =
-        err.response?.status === 404
-          ? 'Aucun membre d’équipe trouvé'
-          : err.response?.data?.error || `Échec de la récupération des membres d’équipe : ${err.message}`;
-      setError(errorMessage);
-      toast.error(errorMessage);
-      setData([]);
-      setTotal(0);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, pageSize, BASE_URL]);
+// Composant pour une zone de dépôt de fichier améliorée (inchangé)
+interface FileDropzoneProps {
+  title: string;
+  file: File | null;
+  onDrop: (acceptedFiles: File[]) => void;
+  onRemove: () => void;
+}
 
-  useEffect(() => {
-    fetchTeamMembers();
-  }, [fetchTeamMembers]);
-
-  // Delete Team Member
-  const handleDelete = async (id: number) => {
-    if (!window.confirm('Êtes-vous sûr de vouloir supprimer ce membre d’équipe ?')) return;
-    setLoading(true);
-    setError(null);
-    try {
-      console.log(`Deleting team member at: ${BASE_URL}/api/team-members/${id}`);
-      await axiosInstance.delete(`/api/team-members/${id}`);
-      toast.success('Membre d’équipe supprimé avec succès');
-      fetchTeamMembers();
-    } catch (err: any) {
-      const errorMessage =
-        err.response?.status === 404
-          ? 'Membre d’équipe non trouvé'
-          : err.response?.data?.error || `Échec de la suppression du membre d’équipe : ${err.message}`;
-      setError(errorMessage);
-      toast.error(errorMessage);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Add Team Member
-  const validateForm = () => {
-    const errors: typeof validationErrors = {};
-    if (!formData.user_id) errors.user_id = 'L’ID utilisateur est requis';
-    else if (isNaN(Number(formData.user_id))) errors.user_id = 'L’ID utilisateur doit être un nombre';
-    if (!formData.mission_id) errors.mission_id = 'L’ID mission est requis';
-    else if (isNaN(Number(formData.mission_id))) errors.mission_id = 'L’ID mission doit être un nombre';
-    if (!formData.role || !ROLES.includes(formData.role)) errors.role = 'Rôle invalide sélectionné';
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleAddTeamMember = async () => {
-    if (!validateForm()) {
-      setFormError('Veuillez corriger les erreurs de validation');
-      toast.error('Veuillez corriger les erreurs de validation');
-      return;
-    }
-
-    setFormLoading(true);
-    setFormError(null);
-
-    try {
-      console.log(`Creating team member at: ${BASE_URL}/api/team-members`, formData);
-      await axiosInstance.post('/api/team-members', {
-        user_id: Number(formData.user_id),
-        mission_id: Number(formData.mission_id),
-        role: formData.role,
-      });
-      toast.success('Membre d’équipe ajouté avec succès');
-      fetchTeamMembers();
-      handleCloseAddDialog();
-    } catch (err: any) {
-      const errorMessage =
-        err.response?.status === 400
-          ? err.response?.data?.error || 'Données de membre d’équipe invalides'
-          : err.response?.data?.error || `Échec de l’ajout du membre d’équipe : ${err.message}`;
-      setFormError(errorMessage);
-      toast.error(errorMessage);
-    } finally {
-      setFormLoading(false);
-    }
-  };
-
-  // Edit Team Member Role
-  const handleEditTeamMember = async () => {
-    if (!formData.id) {
-      setFormError('Aucun membre d’équipe sélectionné');
-      toast.error('Aucun membre d’équipe sélectionné');
-      return;
-    }
-    if (!ROLES.includes(formData.role)) {
-      setFormError('Rôle invalide sélectionné');
-      toast.error('Rôle invalide sélectionné');
-      return;
-    }
-
-    setFormLoading(true);
-    setFormError(null);
-
-    try {
-      console.log(`Updating team member at: ${BASE_URL}/api/team-members/${formData.id}`, { role: formData.role });
-      await axiosInstance.put(`/api/team-members/${formData.id}`, { role: formData.role });
-      toast.success('Rôle du membre d’équipe mis à jour avec succès');
-      fetchTeamMembers();
-      handleCloseEditDialog();
-    } catch (err: any) {
-      const errorMessage =
-        err.response?.status === 404
-          ? 'Membre d’équipe non trouvé'
-          : err.response?.data?.error || `Échec de la mise à jour du rôle : ${err.message}`;
-      setFormError(errorMessage);
-      toast.error(errorMessage);
-    } finally {
-      setFormLoading(false);
-    }
-  };
-
-  const handleOpenEditDialog = (teamMember: TeamMemberType) => {
-    setFormData({
-      id: teamMember.id,
-      user_id: teamMember.user_id.toString(),
-      mission_id: teamMember.mission_id.toString(),
-      role: teamMember.role,
-    });
-    setEditDialogOpen(true);
-  };
-
-  const handleCloseAddDialog = () => {
-    setFormData({ id: 0, user_id: '', mission_id: '', role: 'read_only' });
-    setFormError(null);
-    setValidationErrors({});
-    setFormLoading(false);
-    setAddDialogOpen(false);
-  };
-
-  const handleCloseEditDialog = () => {
-    setFormData({ id: 0, user_id: '', mission_id: '', role: 'read_only' });
-    setFormError(null);
-    setValidationErrors({});
-    setFormLoading(false);
-    setEditDialogOpen(false);
-  };
-
-  const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | { name?: string; value: unknown }>) => {
-    const { name, value } = e.target;
-    if (name) {
-      setFormData({ ...formData, [name]: value as string });
-      setFormError(null);
-      setValidationErrors(prev => ({ ...prev, [name]: undefined }));
-    }
-  };
-
-  // Table Columns
-  const columns = useMemo<ColumnDef<TeamMemberTypeWithAction, any>[]>(
-    () => [
-      columnHelper.accessor('user_name', {
-        header: 'Nom d’utilisateur',
-        cell: ({ row }) => <Typography color='text.primary'>{row.original.user_name}</Typography>,
-      }),
-      columnHelper.accessor('role', {
-        header: 'Rôle',
-        cell: ({ row }) => (
-          <Chip
-            variant='tonal'
-            label={row.original.role.replace('_', ' ').toUpperCase()}
-            color={colors[row.original.role]}
-            size='small'
-          />
-        ),
-      }),
-      columnHelper.accessor('mission_id', {
-        header: 'ID Mission',
-        cell: ({ row }) => <Typography>{row.original.mission_id}</Typography>,
-      }),
-      columnHelper.accessor('user_id', {
-        header: 'ID Utilisateur',
-        cell: ({ row }) => <Typography>{row.original.user_id}</Typography>,
-      }),
-      columnHelper.accessor('action', {
-        header: 'Actions',
-        cell: ({ row }) => {
-          const user = JSON.parse(localStorage.getItem('user') || '{}');
-          const canModify = ['admin_superior', 'manager'].includes(user?.role);
-          return canModify ? (
-            <div className='flex items-center gap-0.5'>
-              <IconButton
-                size='small'
-                onClick={() => handleOpenEditDialog(row.original)}
-                aria-label={`Modifier le rôle de ${row.original.user_name}`}
-              >
-                <i className='ri-edit-box-line text-textSecondary' />
-              </IconButton>
-              <IconButton
-                size='small'
-                onClick={() => handleDelete(row.original.id)}
-                aria-label={`Supprimer le membre d’équipe ${row.original.user_name}`}
-              >
-                <i className='ri-delete-bin-7-line text-textSecondary' />
-              </IconButton>
-            </div>
-          ) : null;
-        },
-        enableSorting: false,
-      }),
-    ],
-    []
-  );
-
-  // Table Setup
-  const table = useReactTable({
-    data,
-    columns,
-    filterFns: { fuzzy: fuzzyFilter },
-    state: { globalFilter, pagination: { pageIndex: page, pageSize } },
-    globalFilterFn: fuzzyFilter,
-    onGlobalFilterChange: setGlobalFilter,
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    getFacetedRowModel: getFacetedRowModel(),
-    getFacetedUniqueValues: getFacetedUniqueValues(),
-    getFacetedMinMaxValues: getFacetedMinMaxValues(),
-    manualPagination: true,
-    pageCount: Math.ceil(total / pageSize),
+const FileDropzone = ({ title, file, onDrop, onRemove }: FileDropzoneProps) => {
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    multiple: false,
+    accept: { 'application/pdf': ['.pdf'] },
   });
 
   return (
-    <>
-      <Card>
-        <CardContent className='flex flex-col sm:flex-row items-start sm:items-center justify-between max-sm:gap-4'>
-          <DebouncedInput
-            value={globalFilter ?? ''}
-            onChange={value => setGlobalFilter(String(value))}
-            placeholder='Rechercher des membres d’équipe'
-            className='max-sm:is-full'
-          />
-          <Button
-            variant='contained'
-            onClick={() => setAddDialogOpen(true)}
-            className='max-sm:is-full'
-            startIcon={<i className='ri-add-line' />}
-            aria-label='Ajouter un nouveau membre d’équipe'
-          >
-            Ajouter un membre d’équipe
-          </Button>
-        </CardContent>
-        <div className='overflow-x-auto'>
-          {loading ? (
-            <CircularProgress sx={{ display: 'block', mx: 'auto', my: 4 }} />
-          ) : error ? (
-            <Alert
-              severity='error'
-              sx={{ m: 4 }}
-              action={
-                <Button color='inherit' size='small' onClick={fetchTeamMembers}>
-                  Réessayer
-                </Button>
-              }
-            >
-              {error}
-            </Alert>
-          ) : data.length === 0 ? (
-            <Alert severity='info' sx={{ m: 4 }}>
-              {globalFilter ? 'Aucun résultat trouvé' : 'Aucun membre d’équipe disponible'}
-            </Alert>
-          ) : (
-            <table className={tableStyles.table}>
-              <thead>
-                {table.getHeaderGroups().map(headerGroup => (
-                  <tr key={headerGroup.id}>
-                    {headerGroup.headers.map(header => (
-                      <th key={header.id}>
-                        {header.isPlaceholder ? null : (
-                          <div
-                            className={classnames({
-                              'flex items-center': header.column.getIsSorted(),
-                              'cursor-pointer select-none': header.column.getCanSort(),
-                            })}
-                            onClick={header.column.getToggleSortingHandler()}
-                            role='button'
-                            aria-sort={
-                              header.column.getIsSorted()
-                                ? header.column.getIsSorted() === 'asc'
-                                  ? 'ascending'
-                                  : 'descending'
-                                : 'none'
-                            }
-                          >
-                            {flexRender(header.column.columnDef.header, header.getContext())}
-                            {{
-                              asc: <i className='ri-arrow-up-s-line text-xl' />,
-                              desc: <i className='ri-arrow-down-s-line text-xl' />,
-                            }[header.column.getIsSorted() as 'asc' | 'desc'] ?? null}
-                          </div>
-                        )}
-                      </th>
-                    ))}
-                  </tr>
-                ))}
-              </thead>
-              <tbody>
-                {table.getRowModel().rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={table.getVisibleFlatColumns().length} className='text-center'>
-                      Aucun membre d’équipe disponible
-                    </td>
-                  </tr>
-                ) : (
-                  table.getRowModel().rows.map(row => (
-                    <tr key={row.id}>
-                      {row.getVisibleCells().map(cell => (
-                        <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                      ))}
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
-        <TablePagination
-          rowsPerPageOptions={[5, 7, 10]}
-          component='div'
-          className='border-bs'
-          count={total}
-          rowsPerPage={pageSize}
-          page={page}
-          SelectProps={{
-            inputProps: { 'aria-label': 'lignes par page' },
+    <Box>
+      <Typography variant="subtitle1" align="center" gutterBottom>{title}</Typography>
+      {file ? (
+        <Paper variant="outlined" sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'action.selected' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', overflow: 'hidden' }}>
+            <DescriptionIcon color="primary" sx={{ mr: 1.5 }}/>
+            <Typography noWrap variant="body2">{file.name}</Typography>
+          </Box>
+          <IconButton onClick={onRemove} size="small"><DeleteIcon /></IconButton>
+        </Paper>
+      ) : (
+        <Box
+          {...getRootProps()}
+          sx={{
+            p: 4,
+            border: '2px dashed',
+            borderColor: isDragActive ? 'primary.main' : 'divider',
+            backgroundColor: isDragActive ? 'action.hover' : 'transparent',
+            textAlign: 'center',
+            cursor: 'pointer',
+            transition: 'background-color 0.2s ease-in-out, border-color 0.2s ease-in-out'
           }}
-          onPageChange={(_, newPage) => setPage(newPage)}
-          onRowsPerPageChange={e => {
-            setPageSize(Number(e.target.value));
-            setPage(0);
-          }}
-          labelRowsPerPage='Lignes par page'
-          labelDisplayedRows={({ from, to, count }) => `${from}–${to} de ${count}`}
-        />
-      </Card>
-
-      {/* Add Team Member Dialog */}
-      <Dialog open={addDialogOpen} onClose={handleCloseAddDialog} maxWidth='sm' fullWidth>
-        <DialogTitle>Ajouter un membre d’équipe</DialogTitle>
-        <DialogContent>
-          {formError && <Alert severity='error' sx={{ mb: 4 }}>{formError}</Alert>}
-          <TextField
-            fullWidth
-            label='ID Utilisateur'
-            name='user_id'
-            type='number'
-            value={formData.user_id}
-            onChange={handleFormChange}
-            sx={{ mb: 4 }}
-            required
-            error={!!validationErrors.user_id}
-            helperText={validationErrors.user_id}
-            disabled={formLoading}
-            aria-required='true'
-            aria-label='ID Utilisateur'
-          />
-          <TextField
-            fullWidth
-            label='ID Mission'
-            name='mission_id'
-            type='number'
-            value={formData.mission_id}
-            onChange={handleFormChange}
-            sx={{ mb: 4 }}
-            required
-            error={!!validationErrors.mission_id}
-            helperText={validationErrors.mission_id}
-            disabled={formLoading}
-            aria-required='true'
-            aria-label='ID Mission'
-          />
-          <TextField
-            fullWidth
-            select
-            label='Rôle'
-            name='role'
-            value={formData.role}
-            onChange={handleFormChange}
-            sx={{ mb: 4 }}
-            required
-            error={!!validationErrors.role}
-            helperText={validationErrors.role}
-            disabled={formLoading}
-            aria-required='true'
-            aria-label='Rôle'
-          >
-            {ROLES.map(role => (
-              <MenuItem key={role} value={role}>
-                {role.replace('_', ' ').toUpperCase()}
-              </MenuItem>
-            ))}
-          </TextField>
-        </DialogContent>
-        <DialogActions>
-          <Button variant='outlined' onClick={handleCloseAddDialog} disabled={formLoading} aria-label='Annuler'>
-            Annuler
-          </Button>
-          <Button
-            variant='contained'
-            onClick={handleAddTeamMember}
-            disabled={formLoading || Object.keys(validationErrors).length > 0}
-            startIcon={formLoading ? <CircularProgress size={24} /> : null}
-            aria-label='Ajouter un membre d’équipe'
-          >
-            Ajouter
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Edit Team Member Role Dialog */}
-      <Dialog open={editDialogOpen} onClose={handleCloseEditDialog} maxWidth='sm' fullWidth>
-        <DialogTitle>Modifier le rôle du membre d’équipe</DialogTitle>
-        <DialogContent>
-          {formError && <Alert severity='error' sx={{ mb: 4 }}>{formError}</Alert>}
-          <TextField
-            fullWidth
-            label='ID Utilisateur'
-            name='user_id'
-            type='number'
-            value={formData.user_id}
-            disabled
-            sx={{ mb: 4 }}
-            aria-label='ID Utilisateur'
-          />
-          <TextField
-            fullWidth
-            label='ID Mission'
-            name='mission_id'
-            type='number'
-            value={formData.mission_id}
-            disabled
-            sx={{ mb: 4 }}
-            aria-label='ID Mission'
-          />
-          <TextField
-            fullWidth
-            select
-            label='Rôle'
-            name='role'
-            value={formData.role}
-            onChange={handleFormChange}
-            sx={{ mb: 4 }}
-            required
-            error={!!validationErrors.role}
-            helperText={validationErrors.role}
-            disabled={formLoading}
-            aria-required='true'
-            aria-label='Rôle'
-          >
-            {ROLES.map(role => (
-              <MenuItem key={role} value={role}>
-                {role.replace('_', ' ').toUpperCase()}
-              </MenuItem>
-            ))}
-          </TextField>
-        </DialogContent>
-        <DialogActions>
-          <Button variant='outlined' onClick={handleCloseEditDialog} disabled={formLoading} aria-label='Annuler'>
-            Annuler
-          </Button>
-          <Button
-            variant='contained'
-            onClick={handleEditTeamMember}
-            disabled={formLoading || !!validationErrors.role}
-            startIcon={formLoading ? <CircularProgress size={24} /> : null}
-            aria-label='Mettre à jour le rôle'
-          >
-            Mettre à jour
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </>
+        >
+          <input {...getInputProps()} />
+          <CloudUploadIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
+          <Typography>Glissez ou cliquez ici</Typography>
+        </Box>
+      )}
+    </Box>
   );
 };
 
-export default TeamMemberPermissions;
+
+const ReportConformityChatbot = () => {
+  const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const [candidateFile, setCandidateFile] = useState<File | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const chatEndRef = useRef<null | HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(scrollToBottom, [messages, loading]);
+
+  const addMessage = (sender: 'user' | 'bot', type: 'text' | 'analysis', content: string | AnalysisResult) => {
+    const newMessage: Message = { sender, type, content, timestamp: new Date().toLocaleTimeString() };
+    setMessages(prev => [...prev, newMessage]);
+  };
+
+  const handleAnalyze = async () => {
+    if (!referenceFile || !candidateFile) {
+        setError("Veuillez téléverser les deux rapports (référence et candidat) avant de lancer l'analyse.");
+        return;
+    }
+
+    setLoading(true);
+    setError(null);
+    addMessage('user', 'text', `Analyse demandée pour '${candidateFile.name}' en utilisant '${referenceFile.name}' comme référence.`);
+    addMessage('bot', 'text', "Les rapports sont envoyés à l'IA pour analyse. Cela peut prendre un moment...");
+
+    const formData = new FormData();
+    formData.append('reference_pdf', referenceFile);
+    formData.append('candidate_pdf', candidateFile);
+
+    try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+        const response = await axios.post(`${apiUrl}/api/analyze-report`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        });
+
+        addMessage('bot', 'analysis', response.data);
+
+    } catch (err: any) {
+        // ==================== CORRECTION DÉFINITIVE APPLIQUÉE ICI ====================
+        let rawErrorMessage: any = "Une erreur inconnue est survenue lors de l'analyse.";
+
+        if (axios.isAxiosError(err)) {
+            if (err.response) {
+                // Le backend a répondu avec un statut d'erreur (4xx, 5xx)
+                // On prend la totalité de la réponse d'erreur
+                rawErrorMessage = err.response.data;
+            } else if (err.request) {
+                // Erreur réseau (le serveur ne répond pas)
+                rawErrorMessage = "Erreur réseau. Impossible de contacter le serveur. Vérifiez qu'il est bien lancé.";
+            }
+        } else if (err instanceof Error) {
+            // Autre type d'erreur JavaScript
+            rawErrorMessage = err.message;
+        }
+
+        // Étape cruciale : On s'assure que le message final est TOUJOURS une chaîne de caractères
+        let finalMessageForState: string;
+        if (typeof rawErrorMessage === 'string') {
+            finalMessageForState = rawErrorMessage;
+        } else if (typeof rawErrorMessage?.error === 'string') {
+            // On essaie d'extraire une clé "error" si elle existe
+            finalMessageForState = rawErrorMessage.error;
+        } else {
+            // Sinon, on convertit l'objet entier en chaîne JSON pour le débogage
+            finalMessageForState = `Le serveur a renvoyé une erreur inattendue : ${JSON.stringify(rawErrorMessage)}`;
+        }
+
+        setError(finalMessageForState);
+        addMessage('bot', 'text', `Erreur : ${finalMessageForState}`);
+        // ============================================================================
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  return (
+    <Box sx={{ p: { xs: 2, md: 4 } }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 4 }}>
+        <ScienceIcon color="primary" sx={{ fontSize: '2.5rem', mr: 2 }} />
+        <Typography variant="h4" component="h1">
+          Analyseur de Conformité de Rapport par IA
+        </Typography>
+      </Box>
+
+      <Grid container spacing={4}>
+        {/* Colonne de Gauche: Configuration */}
+        <Grid item xs={12} md={5}>
+          <Card sx={{ height: '100%' }}>
+            <CardHeader title="Configuration de l'Analyse" />
+            <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <FileDropzone
+                title="1. Rapport de Référence (Template)"
+                file={referenceFile}
+                onDrop={useCallback((files: File[]) => setReferenceFile(files[0] || null), [])}
+                onRemove={() => setReferenceFile(null)}
+              />
+              <FileDropzone
+                title="2. Rapport Candidat (À Analyser)"
+                file={candidateFile}
+                onDrop={useCallback((files: File[]) => setCandidateFile(files[0] || null), [])}
+                onRemove={() => setCandidateFile(null)}
+              />
+              <Box sx={{ mt: 'auto', pt: 2 }}>
+                {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+                <Button
+                  variant="contained"
+                  size="large"
+                  fullWidth
+                  onClick={handleAnalyze}
+                  disabled={!referenceFile || !candidateFile || loading}
+                  startIcon={loading ? <CircularProgress size={20} color="inherit" /> : null}
+                >
+                  {loading ? "Analyse en cours..." : "Lancer l'Analyse de Conformité"}
+                </Button>
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Colonne de Droite: Console / Chat */}
+        <Grid item xs={12} md={7}>
+          <Card sx={{ height: '100%' }}>
+            <CardHeader title="Console de l'Analyse" avatar={<ChatIcon />} />
+            <CardContent sx={{ height: 'calc(100% - 72px)', p: 0, '&:last-child': { pb: 0 } }}>
+              <Box sx={{ height: '100%', position: 'relative' }}>
+                <Paper
+                  square
+                  elevation={0}
+                  sx={{ height: '100%', overflowY: 'auto', p: 2, backgroundColor: 'action.hover' }}
+                >
+                  {messages.length === 0 && !loading && (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'text.secondary' }}>
+                      <ChatIcon sx={{ fontSize: '4rem', mb: 2 }}/>
+                      <Typography>Les résultats de l'analyse apparaîtront ici.</Typography>
+                    </Box>
+                  )}
+                  <List>
+                    {messages.map((msg, index) => (
+                      <ListItem key={index} sx={{ display: 'flex', flexDirection: 'column', alignItems: msg.sender === 'user' ? 'flex-end' : 'flex-start' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexDirection: msg.sender === 'user' ? 'row-reverse' : 'row' }}>
+                          <Avatar sx={{ width: 32, height: 32 }}>{msg.sender === 'user' ? 'U' : <ScienceIcon />}</Avatar>
+                          {msg.type === 'text' && typeof msg.content === 'string' ? (
+                             <Paper elevation={1} sx={{ p: '10px 14px', backgroundColor: msg.sender === 'user' ? 'primary.main' : 'background.paper', color: msg.sender === 'user' ? 'primary.contrastText' : 'text.primary', borderRadius: msg.sender === 'user' ? '14px 14px 0 14px' : '14px 14px 14px 0' }}>
+                                 <Typography variant="body1">{msg.content}</Typography>
+                             </Paper>
+                          ) : (
+                             <AnalysisResultCard details={msg.content as AnalysisResult} />
+                          )}
+                        </Box>
+                        <Typography variant="caption" sx={{ mt: 0.5, color: 'text.secondary' }}>{msg.timestamp}</Typography>
+                      </ListItem>
+                    ))}
+                    <div ref={chatEndRef} />
+                  </List>
+                </Paper>
+                {loading && (
+                  <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255, 255, 255, 0.7)', zIndex: 1 }}>
+                    <CircularProgress />
+                    <Typography sx={{ mt: 2, fontWeight: 500 }}>Analyse par l'IA en cours...</Typography>
+                  </Box>
+                )}
+              </Box>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+    </Box>
+  );
+};
+
+export default ReportConformityChatbot;
