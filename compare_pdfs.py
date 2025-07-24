@@ -167,25 +167,25 @@ def llm_as_a_judge(reference_data, candidate_data, model):
 def main(reference_pdf_path, candidate_pdf_path):
     """Orchestre la comparaison de deux rapports PDF."""
     print("\n--- Lancement de la comparaison de conformité de rapports PDF ---")
-    powerful_model = "llama-3.3-70b-versatile"
+    powerful_model = "llama3-70b-8192"
 
-    # --- Phase 1: Analyse des deux PDF ---
     print("\n[Phase 1] Analyse des documents de référence et candidat...")
     reference_structure = analyze_pdf_structure(reference_pdf_path, powerful_model)
     if 'error' in reference_structure:
-        print(f"!! ERREUR FATALE sur le PDF de référence : {reference_structure['error']}")
-        return
+        msg = f"Erreur fatale sur le PDF de référence : {reference_structure['error']}"
+        print(f"!! {msg}")
+        return {"error": msg}
 
     candidate_structure = analyze_pdf_structure(candidate_pdf_path, powerful_model)
     if 'error' in candidate_structure:
-        print(f"!! ERREUR FATALE sur le PDF candidat : {candidate_structure['error']}")
-        return
+        msg = f"Erreur fatale sur le PDF candidat : {candidate_structure['error']}"
+        print(f"!! {msg}")
+        return {"error": msg}
 
     print("-> Analyse structurelle des deux documents terminée.")
     
-    # --- Phase 2: Comparaison et Scoring ---
     final_score, findings = llm_as_a_judge(reference_structure, candidate_structure, powerful_model)
-    # --- Phase 3: Rapport Final par l'IA ---
+    
     print("\n[Phase 3] Génération du rapport de synthèse par l'IA...")
     reporter_prompt = COMPARISON_REPORTER_PROMPT.format(
         final_score=final_score,
@@ -195,17 +195,17 @@ def main(reference_pdf_path, candidate_pdf_path):
     final_report = call_groq_model(reporter_prompt, powerful_model)
 
     if 'error' in final_report:
-        print("!! Échec de la génération du rapport de synthèse. Affichage des résultats bruts.")
-        print(json.dumps({"score": final_score, "details": findings}, indent=4))
-        return
+        msg = "Échec de la génération du rapport de synthèse."
+        print(f"!! {msg}")
+        return {"error": msg}
 
-    # On ajoute le score au rapport final pour être complet
     final_report['final_score'] = final_score
 
     print("\n\n--- ✅ COMPARAISON DE CONFORMITÉ TERMINÉE ---")
     print(json.dumps(final_report, indent=4, ensure_ascii=False))
-
-
+    
+    # ====================== CORRECTION FINALE ET CRUCIALE ======================
+    return final_report
 # --- Étape 5: Point d'Entrée du Script ---
 if __name__ == "__main__":
     if len(sys.argv) != 3:

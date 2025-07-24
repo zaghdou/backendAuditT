@@ -1,5 +1,5 @@
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from flask import Flask, jsonify, request, send_from_directory, send_file
 from flask_cors import CORS
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -23,7 +23,11 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 from sqlalchemy.orm import joinedload
-
+import json # <--- Assurez-vous que json est importé
+from groq import Groq # <--- Assurez-vous que Groq est importé
+import fitz # <--- LIGNE CORRIGÉE
+import tempfile
+from compare_pdfs import main as analyze_pdfs_main
 # Load environment variables
 load_dotenv()
 
@@ -34,7 +38,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False') == 'True'
 app.config['UPLOAD_FOLDER'] = os.getenv('UPLOAD_FOLDER', os.path.join(os.path.abspath(os.path.dirname(__file__)), 'Uploads'))
 app.config['ALLOWED_EXTENSIONS'] = {'pdf', 'doc', 'docx'}
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB file size limit
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 CORS(app, resources={r"/api/*": {"origins": os.getenv('CORS_ORIGIN', 'http://localhost:3000')}})
 
 # Ensure upload folder exists
@@ -49,7 +53,75 @@ app.logger.addHandler(handler)
 # Initialize database
 db.init_app(app)
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    app.logger.warning("La variable d'environnement 'GROQ_API_KEY' n'est pas définie. L'analyse par IA ne fonctionnera pas.")
+    groq_client = None
+else:
+    try:
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        app.logger.info("Client Groq initialisé avec la clé se terminant par '...{}'.".format(GROQ_API_KEY[-4:]))
+    except Exception as e:
+        groq_client = None
+        app.logger.error(f"Échec de l'initialisation du client Groq : {e}")
+PDF_CONTROL_EXTRACTOR_PROMPT = """
+Tu es un assistant d'audit spécialisé dans la lecture de rapports SOC 2. Ta mission est de lire le texte brut extrait d'un rapport d'audit et d'extraire CHAQUE point de contrôle individuel listé. Pour chaque contrôle, tu dois extraire :
+1. L'identifiant du contrôle (ex: "CC1.1.1", "CC1.1.2").
+2. La description de l'activité de contrôle (Control Activity).
+3. Le résultat du test (Test Results).
+Si aucun contrôle n'est trouvé dans le texte fourni, retourne un objet JSON avec une liste "controls" vide.
+**Texte à analyser :**
+{text_chunk}
+Retourne **UNIQUEMENT** un objet JSON valide contenant une seule clé "controls". La valeur doit être une liste d'objets.
+"""
+
+CONTROL_ANALYZER_PROMPT = """
+Tu es un auditeur IT qui évalue le résultat d'un test de contrôle unique.
+**Informations du contrôle :**
+- Identifiant : {control_id}
+- Activité de contrôle : {control_activity}
+- Résultat du test par l'auditeur : {test_result}
+**Ta mission :**
+Attribue un score de conformité et une justification basés **uniquement sur le `test_result`**.
+- Si le `test_result` est "No deviation identified", "Aucune déviation identifiée", ou une phrase similaire indiquant un succès total, le score doit être **100**. La justification doit confirmer que le contrôle est efficace.
+- Si le `test_result` mentionne une "exception", un "échec" ou une déviation, attribue un score plus bas (entre 40 et 70) et explique la nature de l'échec dans la justification.
+- Si le `test_result` n'est pas clair, attribue un score de 50.
+Retourne **UNIQUEMENT** un objet JSON valide avec les clés "control_id", "score", et "justification".
+"""
+
+REPORT_SYNTHESIZER_PROMPT_FRONTEND = """
+Tu es un directeur d'audit. Tu as reçu les scores de conformité pour tous les contrôles d'un rapport.
+**Analyses des contrôles :**
+{control_analyses}
+**Ta mission :**
+1.  **Calculer le score final de conformité** (moyenne de tous les scores, arrondi à l'entier).
+2.  **Rédiger un résumé exécutif** (2-3 phrases) qui reflète le score. Si le score est élevé (ex: >95), indique que les contrôles sont globalement efficaces.
+3.  **Identifier les points positifs** (les contrôles avec un score de 100). Liste les 3 plus pertinents. S'il n'y en a pas, retourne une liste vide.
+4.  **Identifier les axes d'amélioration** (les contrôles avec un score < 100). Liste les 3 plus critiques. S'il n'y a pas de risque (tous les scores sont à 100), retourne une liste vide.
+
+Retourne **UNIQUEMENT** un objet JSON valide avec les clés : "final_score" (nombre), "summary" (chaîne), "positive_points" (liste de chaînes), et "areas_for_improvement" (liste de chaînes).
+"""
+
+def call_groq_model(prompt, model_name):
+    """Fonction générique pour appeler un modèle Groq et parser la réponse JSON."""
+    if not groq_client:
+        raise Exception("Le client Groq n'est pas initialisé.")
+    try:
+        chat_completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model=model_name,
+            response_format={"type": "json_object"},
+        )
+        response_content = chat_completion.choices[0].message.content
+        return json.loads(response_content)
+    except Exception as e:
+        app.logger.error(f"Erreur lors de l'appel à l'API Groq : {type(e).__name__} - {e}")
+        raise e
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 def init_db():
+    # ... (votre code existant, inchangé)
     with app.app_context():
         try:
             app.logger.info("Initializing database...")
@@ -74,6 +146,7 @@ def init_db():
             raise
 
 init_db()
+
 
 # Root endpoint
 @app.route('/', methods=['GET'])
@@ -1529,6 +1602,77 @@ def delete_user(user_id):
     except Exception as e:
         app.logger.error(f"Unexpected error deleting user {user_id}: {str(e)}", exc_info=True)
         return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+# Dans votre fichier app.py
 
+@app.route('/api/analyze-report', methods=['POST'])
+def analyze_report_conformity():
+    app.logger.info("Requête d'analyse de conformité reçue.")
+
+    if not groq_client:
+        app.logger.error("Tentative d'analyse alors que le client Groq n'est pas initialisé.")
+        return jsonify({"error": "Le service d'analyse par IA n'est pas configuré sur le serveur (clé API manquante)."}), 503
+
+    if 'candidate_pdf' not in request.files or 'reference_pdf' not in request.files:
+        app.logger.error("Fichiers manquants dans la requête: 'candidate_pdf' et 'reference_pdf' sont requis.")
+        return jsonify({"error": "Les fichiers PDF de référence et candidat sont requis."}), 400
+
+    candidate_file = request.files['candidate_pdf']
+    reference_file = request.files['reference_pdf']
+
+    if (candidate_file.filename == '' or not allowed_file(candidate_file.filename) or
+        reference_file.filename == '' or not allowed_file(reference_file.filename)):
+        app.logger.error("Type de fichier non valide pour le candidat ou la référence.")
+        return jsonify({"error": "Type de fichier non valide. Seuls les fichiers PDF sont acceptés."}), 400
+
+    # On a besoin des chemins des fichiers en dehors du 'with' pour le bloc 'finally'
+    temp_dir_path = tempfile.mkdtemp(dir=app.config['UPLOAD_FOLDER'])
+    candidate_filepath = os.path.join(temp_dir_path, secure_filename(candidate_file.filename))
+    reference_filepath = os.path.join(temp_dir_path, secure_filename(reference_file.filename))
+
+    try:
+        candidate_file.save(candidate_filepath)
+        reference_file.save(reference_filepath)
+        app.logger.info(f"Fichiers sauvegardés temporairement: Candidat={candidate_filepath}, Référence={reference_filepath}")
+
+        # Appel de la fonction d'analyse
+        final_report = analyze_pdfs_main(
+            reference_pdf_path=reference_filepath,
+            candidate_pdf_path=candidate_filepath
+        )
+
+        # Vérification robuste du retour
+        if not final_report:
+             app.logger.error("L'analyse n'a retourné aucun résultat (None).")
+             return jsonify({"error": "L'analyse a échoué et n'a retourné aucun résultat."}), 500
+
+        if "error" in final_report:
+            error_message = final_report.get("error", "L'analyse a produit une erreur non spécifiée.")
+            app.logger.error(f"Erreur renvoyée par le script d'analyse : {error_message}")
+            return jsonify({"error": error_message}), 422
+
+        app.logger.info("Analyse par IA terminée avec succès.")
+        return jsonify(final_report), 200
+
+    except TypeError as te:
+        app.logger.error(f"Erreur de type (TypeError) durant l'appel de l'analyse: {te}", exc_info=True)
+        return jsonify({"error": f"Erreur de configuration du serveur (TypeError): {te}"}), 500
+    except Exception as e:
+        app.logger.error(f"Erreur majeure durant le processus d'analyse IA : {str(e)}", exc_info=True)
+        # CORRECTION DU CODE DE STATUT HTTP
+        return jsonify({"error": f"Une erreur est survenue sur le serveur durant l'analyse : {str(e)}"}), 500
+    
+    # CORRECTION DE LA SYNTAXE : Le bloc 'finally' est maintenant à la bonne place
+    finally:
+        # Logique de nettoyage pour supprimer les fichiers et le dossier temporaires
+        try:
+            for filepath in [candidate_filepath, reference_filepath]:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    app.logger.info(f"Fichier temporaire {os.path.basename(filepath)} supprimé.")
+            if os.path.exists(temp_dir_path):
+                os.rmdir(temp_dir_path)
+                app.logger.info(f"Dossier temporaire {os.path.basename(temp_dir_path)} supprimé.")
+        except Exception as e:
+            app.logger.error(f"Erreur lors du nettoyage des fichiers temporaires : {e}", exc_info=True)
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)), debug=app.config['DEBUG'])
+    app.run(debug=True, host='0.0.0.0', port=5000)
