@@ -1,11 +1,20 @@
 'use client';
 
+// React Imports
+import { useCallback } from 'react';
+
 // Next Imports
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
+
+// ====================== IMPORT ESSENTIEL POUR LA DÉCONNEXION ======================
+import { signOut } from 'next-auth/react';
+// =================================================================================
 
 // MUI Imports
 import { useTheme } from '@mui/material/styles';
 import Chip from '@mui/material/Chip';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 
 // Third-party Imports
 import PerfectScrollbar from 'react-perfect-scrollbar';
@@ -26,7 +35,7 @@ import StyledVerticalNavExpandIcon from '@menu/styles/vertical/StyledVerticalNav
 import menuItemStyles from '@core/styles/vertical/menuItemStyles';
 import menuSectionStyles from '@core/styles/vertical/menuSectionStyles';
 
-// Dictionary Type
+// (Le type NavigationDictionary reste le même)
 type NavigationDictionary = {
   navigation: {
     home: string;
@@ -47,6 +56,7 @@ type NavigationDictionary = {
     roles: string;
     permissions: string;
     teamMembers: string;
+    logout?: string;
   };
 };
 
@@ -78,74 +88,105 @@ const VerticalMenu = ({ dictionary, scrollMenu }: Props) => {
 
   const ScrollWrapper = isBreakpointReached ? 'div' : PerfectScrollbar;
 
+  // ====================== GESTION DE LA DÉCONNEXION (MÉTHODE NEXT-AUTH) ======================
+  const handleUserLogout = useCallback(async () => {
+    // Utilise la fonction signOut de NextAuth
+    // Elle supprime le cookie de session et redirige.
+    await signOut({
+      redirect: true, // Assure la redirection
+      callbackUrl: `/${locale}/login` // Spécifie où rediriger l'utilisateur après la déconnexion
+    });
+  }, [locale]);
+  // ==========================================================================================
+
   return (
-    <ScrollWrapper
-      {...(isBreakpointReached
-        ? {
-            className: 'bs-full overflow-y-auto overflow-x-hidden',
-            onScroll: container => scrollMenu(container, false),
-          }
-        : {
-            options: { wheelPropagation: false, suppressScrollX: true },
-            onScrollY: container => scrollMenu(container, true),
-          })}
-    >
-      <Menu
-        popoutMenuOffset={{ mainAxis: 17 }}
-        menuItemStyles={menuItemStyles(verticalNavOptions, theme)}
-        renderExpandIcon={({ open }) => <RenderExpandIcon open={open} transitionDuration={transitionDuration} />}
-        renderExpandedMenuItemIcon={{ icon: <i className='ri-circle-fill' /> }}
-        menuSectionStyles={menuSectionStyles(verticalNavOptions, theme)}
-      >
-        <MenuItem
-          href={`/${locale}/dashboards/crm`}
-          icon={<i className='ri-home-smile-line' />}
-          suffix={<Chip label='New' size='small' color='error' />}
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ flexGrow: 1, position: 'relative' }}>
+        <ScrollWrapper
+          {...(isBreakpointReached
+            ? {
+                className: 'bs-full overflow-y-auto overflow-x-hidden',
+                onScroll: container => scrollMenu(container, false),
+              }
+            : {
+                containerRef: (ref: any) => (ref),
+                options: { wheelPropagation: false, suppressScrollX: true },
+                onScrollY: container => scrollMenu(container, true),
+              })}
         >
-          {dictionary.navigation.home}
-        </MenuItem>
-        <MenuSection label={dictionary.navigation.management}>
-          <SubMenu label={dictionary.navigation.projectManagement} icon={<i className='ri-task-line' />}>
-            <MenuItem href={`/${locale}/apps/roles`}>{dictionary.navigation.teamMembers}</MenuItem>
-            <MenuItem href={`/${locale}/apps/ecommerce/products/list`}>{dictionary.navigation.list}</MenuItem>
-            <MenuItem href={`/${locale}/apps/ecommerce/products/add`}>{dictionary.navigation.add}</MenuItem>
-          </SubMenu>
-          <SubMenu label={dictionary.navigation.customerManagement} icon={<i className='ri-group-line' />}>
-            <MenuItem href={`/${locale}/apps/ecommerce/customers/list`}>{dictionary.navigation.list}</MenuItem>
+          <Menu
+            popoutMenuOffset={{ mainAxis: 17 }}
+            menuItemStyles={menuItemStyles(verticalNavOptions, theme)}
+            renderExpandIcon={({ open }) => <RenderExpandIcon open={open} transitionDuration={transitionDuration} />}
+            renderExpandedMenuItemIcon={{ icon: <i className='ri-circle-fill' /> }}
+            menuSectionStyles={menuSectionStyles(verticalNavOptions, theme)}
+          >
+            {/* Votre structure de menu reste inchangée */}
             <MenuItem
-              href={`/${locale}/apps/ecommerce/customers/details/879861`}
-              exactMatch={false}
-              activeUrl='/apps/ecommerce/customers/details'
+              href={`/${locale}/dashboards/crm`}
+              icon={<i className='ri-home-smile-line' />}
+              suffix={<Chip label='New' size='small' color='error' />}
             >
-              {dictionary.navigation.details}
+              {dictionary.navigation.home}
             </MenuItem>
-          </SubMenu>
-          <SubMenu label={dictionary.navigation.reportManagement} icon={<i className='ri-bar-chart-line' />}>
-            <MenuItem href={`/${locale}/apps/invoice/list`}>{dictionary.navigation.list}</MenuItem>
-            <MenuItem
-              href={`/${locale}/apps/invoice/edit/4987`}
-              exactMatch={false}
-              activeUrl='/apps/invoice/edit'
-            >
-              {dictionary.navigation.edit}
-            </MenuItem>
-            <MenuItem href={`/${locale}/apps/invoice/add`}>{dictionary.navigation.add}</MenuItem>
-          </SubMenu>
-        </MenuSection>
-        <MenuSection label={dictionary.navigation.administration}>
-          <SubMenu label={dictionary.navigation.userManagement} icon={<i className='ri-user-line' />}>
-            <MenuItem href={`/${locale}/apps/user/list`}>{dictionary.navigation.list}</MenuItem>
-            <MenuItem href={`/${locale}/apps/user/view`}>{dictionary.navigation.view}</MenuItem>
-          </SubMenu>
-          <SubMenu label={dictionary.navigation.agentIAManagement} icon={<i className='ri-robot-line' />}>
-            <MenuItem href={`/${locale}/apps/permissions`}>{dictionary.navigation.list}</MenuItem>
-          </SubMenu>
-          <SubMenu label={dictionary.navigation.category} icon={<i className='ri-book-2-line' />}>
-            <MenuItem href={`/${locale}/apps/ecommerce/products/category`}>{dictionary.navigation.category}</MenuItem>
-          </SubMenu>
-        </MenuSection>
-      </Menu>
-    </ScrollWrapper>
+            <MenuSection label={dictionary.navigation.management}>
+              <SubMenu label={dictionary.navigation.projectManagement} icon={<i className='ri-task-line' />}>
+                <MenuItem href={`/${locale}/apps/roles`}>{dictionary.navigation.teamMembers}</MenuItem>
+                <MenuItem href={`/${locale}/apps/ecommerce/products/list`}>{dictionary.navigation.list}</MenuItem>
+                <MenuItem href={`/${locale}/apps/ecommerce/products/add`}>{dictionary.navigation.add}</MenuItem>
+              </SubMenu>
+              <SubMenu label={dictionary.navigation.customerManagement} icon={<i className='ri-group-line' />}>
+                <MenuItem href={`/${locale}/apps/ecommerce/customers/list`}>{dictionary.navigation.list}</MenuItem>
+                <MenuItem
+                  href={`/${locale}/apps/ecommerce/customers/details/879861`}
+                  exactMatch={false}
+                  activeUrl='/apps/ecommerce/customers/details'
+                >
+                  {dictionary.navigation.details}
+                </MenuItem>
+              </SubMenu>
+              <SubMenu label={dictionary.navigation.reportManagement} icon={<i className='ri-bar-chart-line' />}>
+                <MenuItem href={`/${locale}/apps/invoice/list`}>{dictionary.navigation.list}</MenuItem>
+                <MenuItem
+                  href={`/${locale}/apps/invoice/edit/4987`}
+                  exactMatch={false}
+                  activeUrl='/apps/invoice/edit'
+                >
+                  {dictionary.navigation.edit}
+                </MenuItem>
+                <MenuItem href={`/${locale}/apps/invoice/add`}>{dictionary.navigation.add}</MenuItem>
+              </SubMenu>
+            </MenuSection>
+            <MenuSection label={dictionary.navigation.administration}>
+              <SubMenu label={dictionary.navigation.userManagement} icon={<i className='ri-user-line' />}>
+                <MenuItem href={`/${locale}/apps/user/list`}>{dictionary.navigation.list}</MenuItem>
+                <MenuItem href={`/${locale}/apps/user/view`}>{dictionary.navigation.view}</MenuItem>
+              </SubMenu>
+              <SubMenu label={dictionary.navigation.agentIAManagement} icon={<i className='ri-robot-line' />}>
+                <MenuItem href={`/${locale}/apps/permissions`}>{dictionary.navigation.list}</MenuItem>
+              </SubMenu>
+              <SubMenu label={dictionary.navigation.category} icon={<i className='ri-book-2-line' />}>
+                <MenuItem href={`/${locale}/apps/ecommerce/products/category`}>{dictionary.navigation.category}</MenuItem>
+              </SubMenu>
+            </MenuSection>
+          </Menu>
+        </ScrollWrapper>
+      </Box>
+
+      {/* Le bouton de déconnexion reste le même, mais appelle maintenant la nouvelle fonction */}
+      <Box sx={{ p: 4, mt: 'auto' }}>
+        <Button
+          fullWidth
+          variant='contained'
+          color='error'
+          size='small'
+          endIcon={<i className='ri-logout-box-r-line' />}
+          onClick={handleUserLogout}
+        >
+          Logout
+        </Button>
+      </Box>
+    </Box>
   );
 };
 
