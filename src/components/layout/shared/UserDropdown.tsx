@@ -19,10 +19,9 @@ import MenuList from '@mui/material/MenuList'
 import Typography from '@mui/material/Typography'
 import Divider from '@mui/material/Divider'
 import MenuItem from '@mui/material/MenuItem'
-import Button from '@mui/material/Button'
 
 // Third-party Imports
-import { signOut, useSession } from 'next-auth/react'
+import { useSession } from 'next-auth/react'
 
 // Type Imports
 import type { Locale } from '@configs/i18n'
@@ -70,18 +69,6 @@ const UserDropdown = () => {
     }
 
     setOpen(false)
-  }
-
-  const handleUserLogout = async () => {
-    try {
-      // Sign out from the app
-      await signOut({ callbackUrl: process.env.NEXT_PUBLIC_APP_URL })
-    } catch (error) {
-      console.error(error)
-
-      // Show above error in a toast like following
-      // toastService.error((err as Error).message)
-    }
   }
 
   return (
@@ -136,30 +123,8 @@ const UserDropdown = () => {
                     <i className='ri-user-3-line' />
                     <Typography color='text.primary'>My Profile</Typography>
                   </MenuItem>
-                  <MenuItem className='gap-3 pli-4' onClick={e => handleDropdownClose(e, '/pages/account-settings')}>
-                    <i className='ri-settings-4-line' />
-                    <Typography color='text.primary'>Settings</Typography>
-                  </MenuItem>
-                  <MenuItem className='gap-3 pli-4' onClick={e => handleDropdownClose(e, '/pages/pricing')}>
-                    <i className='ri-money-dollar-circle-line' />
-                    <Typography color='text.primary'>Pricing</Typography>
-                  </MenuItem>
-                  <MenuItem className='gap-3 pli-4' onClick={e => handleDropdownClose(e, '/pages/faq')}>
-                    <i className='ri-question-line' />
-                    <Typography color='text.primary'>FAQ</Typography>
-                  </MenuItem>
-                  <div className='flex items-center plb-1.5 pli-4'>
-                    <Button
-                      fullWidth
-                      variant='contained'
-                      color='error'
-                      size='small'
-                      endIcon={<i className='ri-logout-box-r-line' />}
-                      onClick={handleUserLogout}
-                    >
-                      Logout
-                    </Button>
-                  </div>
+                  {/* Les éléments de menu pour Settings, Pricing, et FAQ ont été supprimés ici */}
+                  {/* Le bouton Logout a également été supprimé */}
                 </MenuList>
               </ClickAwayListener>
             </Paper>
